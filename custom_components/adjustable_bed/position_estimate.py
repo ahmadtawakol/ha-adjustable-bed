@@ -662,6 +662,13 @@ def notify_release_failed(coordinator: object) -> None:
         bed.abandon_moves(EstimateReason.FAILED_MOVE)
 
 
+def notify_untracked_preset(coordinator: object) -> None:
+    """Controller hook: the bed starts a recall the integration cannot time."""
+    bed = _bed_for_coordinator(coordinator)
+    if bed is not None:
+        bed.invalidate(EstimateReason.HARDWARE_PRESET)
+
+
 # ------------------------------------------------------------ command wrappers
 def _clock() -> float:
     return time.monotonic()

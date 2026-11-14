@@ -14,6 +14,7 @@ from homeassistant.util import dt as dt_util
 from ...codec import richmat as codec
 from ...controller_state import StateKey
 from ...execution import ExecutionProfile
+from ...position_estimate import notify_untracked_preset
 from ...profiles.casper import (
     ACTIONS,
     ANTI_SNORE,
@@ -64,6 +65,19 @@ SOUNDTRACK_DELAY_S = 0.9
 """The soundtrack switch follows its Bluetooth switch after this delay."""
 SNORE_POLL_S = 3
 """The external snore detector is sampled this often, first after one period."""
+PRESET_MOVES: Final = frozenset(
+    {
+        "MemoryPosition1",
+        "MemoryPosition2",
+        "MemoryPosition3",
+        "AntiSnoring",
+        "LoungePosition",
+        "ZeroGravity",
+        "TVPosition",
+        "MotorReset",
+    }
+)
+"""Recalls the base runs on its own, so travel-time estimates cannot follow them."""
 
 
 class ProductProfile(ExecutionProfile, Protocol):
@@ -269,6 +283,24 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         )
 
     @property
+    def estimated_position_motor_groups(self) -> Mapping[str, tuple[str, ...]]:
+        """Each axis is a directional pulse train that always ends with STOP.
+
+        Lumbar and the third motor are separate actuators, so moving them
+        leaves the other estimates intact.
+        """
+        groups: dict[str, tuple[str, ...]] = {
+            "back": ("back",),
+            "legs": ("legs",),
+            "head": ("head",),
+            "head_feet": ("back", "legs"),
+            "lumbar": (),
+            "motor_3": (),
+        }
+        keys = {spec.key for spec in self.motor_control_specs}
+        return {key: motors for key, motors in groups.items() if key in keys}
+
+    @property
     def controller_button_specs(self) -> tuple[ControllerButtonSpec, ...]:
         specs: list[ControllerButtonSpec] = []
         for name, (_short, long) in self.actions.items():
@@ -284,6 +316,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
                         partial(invoke, action=name, save=save),
                         translation_key="casper_base_action",
                         translation_placeholders={"action": label},
+                        invalidates_position=not save and name in PRESET_MOVES,
                     )
                 )
         if self.product[8]:
@@ -540,6 +573,8 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         elif result == 1:
             self._snore_count += 1
         if self._snore_count >= 5:
+            # The base runs this recall on its own, so estimates cannot follow it.
+            notify_untracked_preset(self._coordinator)
             # Automatic path always uses default left, independent of manual side.
             await self._send(codec.function(ANTI_SNORE, single=self._single))
             self._snore_count = 0
