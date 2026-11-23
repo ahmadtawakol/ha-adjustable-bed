@@ -201,13 +201,12 @@ def test_max_offers_estimates_for_its_directional_axes():
 def test_only_recalls_that_move_the_bed_invalidate_estimates():
     ctrl, _ = make("caspermax")
     invalidating = {spec.key for spec in ctrl.controller_button_specs if spec.invalidates_position}
+    # Flat and memory recall use the shared preset buttons, which already invalidate.
     assert invalidating == {
-        "casper_memoryposition1",
         "casper_antisnoring",
         "casper_loungeposition",
         "casper_zerogravity",
         "casper_tvposition",
-        "casper_motorreset",
     }
 
 
