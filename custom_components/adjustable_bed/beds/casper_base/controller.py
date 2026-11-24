@@ -66,6 +66,9 @@ SOUNDTRACK_DELAY_S = 0.9
 """The soundtrack switch follows its Bluetooth switch after this delay."""
 LIGHT_ALWAYS_ON: Final = "Always On"
 """The light timer option that keeps the light on until it is turned off."""
+LIGHT_TIMER_OPTIONS: Final = (LIGHT_ALWAYS_ON, *(f"{minute} min" for minute in range(1, 16)))
+LIGHT_PAGE_WAIT_S = 1.0
+"""A command right after connecting waits this long for the light capability reply."""
 SNORE_POLL_S = 3
 """The external snore detector is sampled this often, first after one period."""
 
@@ -223,15 +226,24 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     async def lights_on(self) -> None:
         await self.set_light_color(self._light_rgb)
 
-    async def lights_off(self) -> None:
+    async def _require_light_page(self) -> None:
+        """Wait briefly for this connection's light reply, which follows the startup query."""
+        if not self._has_light_page:
+            raise NotImplementedError("This bed has no light page")
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + LIGHT_PAGE_WAIT_S
+        while not self._light_page_open and loop.time() < deadline:
+            await asyncio.sleep(0.05)
         if not self._light_page_open:
             raise NotImplementedError("This bed has not opened its light page")
+
+    async def lights_off(self) -> None:
+        await self._require_light_page()
         await self._send(codec.function(LIGHT_OFF, single=self._single))
 
     async def set_light_color(self, rgb_color: tuple[int, int, int]) -> None:
         # The colour frame also switches the light on.
-        if not self._light_page_open:
-            raise NotImplementedError("This bed has not opened its light page")
+        await self._require_light_page()
         await self._send(codec.rgb(*rgb_color))
         self._light_rgb = rgb_color
 
@@ -245,17 +257,16 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
 
     @property
     def light_timer_options(self) -> list[str]:
-        if not self._light_page_open:
-            return []
-        return [LIGHT_ALWAYS_ON, *(f"{minute} min" for minute in range(1, 16))]
+        return list(LIGHT_TIMER_OPTIONS) if self._light_page_open else []
 
     @property
     def light_auto_off_seconds(self) -> int | None:
         return self._light_timer_seconds or None
 
     async def set_light_timer(self, timer_option: str) -> None:
-        if timer_option not in self.light_timer_options:
+        if timer_option not in LIGHT_TIMER_OPTIONS:
             raise ValueError("Choose a light timer this bed offers")
+        await self._require_light_page()
         seconds = 0 if timer_option == LIGHT_ALWAYS_ON else int(timer_option.split()[0]) * 60
         with self.sent_state(LIGHT_TIMER_OPTION(timer_option)):
             await self._send(codec.light_timer(*light_duration(seconds)))

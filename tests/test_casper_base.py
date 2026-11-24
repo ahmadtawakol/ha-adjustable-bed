@@ -505,3 +505,17 @@ def test_pro_and_rgb_products_have_no_ordinary_light_entity():
     pro, _ = make("casperpro")
     pro._consume(Event("light_available", {}))
     assert not pro.supports_light_color_control and pro.retained_entity_keys == frozenset()
+
+
+async def test_light_command_right_after_connect_waits_for_the_light_reply():
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+
+    async def reply():
+        await asyncio.sleep(0)
+        ctrl._consume(Event("light_available", {}))
+
+    task = asyncio.create_task(reply())
+    await ctrl.set_light_timer("Always On")
+    await task
+    assert frames(c)[-1] == "6e0bffff77"
