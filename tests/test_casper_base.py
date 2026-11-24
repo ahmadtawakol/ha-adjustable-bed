@@ -479,7 +479,11 @@ async def test_light_page_opens_the_rgb_light_and_timer():
     ctrl, c = make("caspermax")
     assert not ctrl.supports_light_color_control
     assert ctrl.light_color_control_pending and ctrl.light_timer_pending
-    assert ctrl.retained_entity_keys == {("light", "under_bed_lights"), ("select", "light_timer")}
+    assert ctrl.retained_entity_keys == {
+        ("light", "under_bed_lights"),
+        ("select", "light_timer"),
+        ("number", "light_level"),
+    }
     await ctrl.start_notify()
     ctrl._consume(Event("light_available", {}))
     assert ctrl.supports_light_color_control and ctrl.supports_discrete_light_control
@@ -537,3 +541,18 @@ async def test_light_level_dims_the_colour():
         codec.rgb(100, 50, 0).hex(),
         "6e010075e4",
     ]
+
+
+async def test_colour_change_sends_one_spaced_light_frame(fast_sleep):
+    from custom_components.adjustable_bed.codec import richmat as codec
+
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    assert not ctrl.supports_explicit_light_on_control
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.set_light_color((0, 0, 255))
+    await ctrl.set_light_level(100)  # the level the colour frame already carried
+    await ctrl.set_light_level(40)
+    assert frames(c) == [codec.rgb(0, 0, 255).hex(), codec.rgb(0, 0, 102).hex()]
+    assert any(0 < d <= 0.4 for d in fast_sleep)

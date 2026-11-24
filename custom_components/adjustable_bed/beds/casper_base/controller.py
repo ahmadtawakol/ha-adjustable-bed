@@ -68,6 +68,8 @@ LIGHT_ALWAYS_ON: Final = "Always On"
 """The light timer option that keeps the light on until it is turned off."""
 LIGHT_TIMER_OPTIONS: Final = (LIGHT_ALWAYS_ON, *(f"{minute} min" for minute in range(1, 16)))
 LIGHT_PAGE_WAIT_S = 1.0
+LIGHT_FRAME_GAP_S = 0.4
+"""Minimum spacing between light frames; the bed ignores a second one sent 100 ms after the first."""
 """A command right after connecting waits this long for the light capability reply."""
 SNORE_POLL_S = 3
 """The external snore detector is sampled this often, first after one period."""
@@ -126,6 +128,8 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._music_bluetooth = False
         self._light_rgb: tuple[int, int, int] = (255, 255, 255)
         self._light_level = 100
+        self._light_frame_at = 0.0
+        self._light_frame_sent = False
         self._light_timer_seconds = 0
 
     @property
@@ -193,7 +197,9 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     def retained_entity_keys(self) -> frozenset[tuple[str, str]]:
         # The light and its timer appear once the light capability reply arrives.
         if self._has_light_page and not self._light_page_open:
-            return frozenset({("light", "under_bed_lights"), ("select", "light_timer")})
+            return frozenset(
+                {("light", "under_bed_lights"), ("select", "light_timer"), ("number", "light_level")}
+            )
         return frozenset()
 
     @property
@@ -207,6 +213,12 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     @property
     def light_state_is_assumed(self) -> bool:
         return True
+
+    @property
+    def supports_explicit_light_on_control(self) -> bool:
+        # The colour frame is the light-on command: one frame per change, since
+        # the bed shows only the first of two light frames sent close together.
+        return False
 
     @property
     def supports_light_color_control(self) -> bool:
@@ -244,8 +256,21 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
             await self.lights_off()
             return
         await self._require_light_page()
-        self._light_level = min(level, 100)
-        await self._send(codec.rgb(*self._scaled_rgb()))
+        level = min(level, 100)
+        if level == self._light_level and self._light_frame_sent:
+            return  # The colour frame just sent already carried this level.
+        self._light_level = level
+        await self._send_light(codec.rgb(*self._scaled_rgb()))
+
+    async def _send_light(self, packet: bytes) -> None:
+        """Space light frames out; the bed drops one that follows another too closely."""
+        loop = asyncio.get_running_loop()
+        wait = self._light_frame_at + LIGHT_FRAME_GAP_S - loop.time()
+        if self._light_frame_sent and wait > 0:
+            await asyncio.sleep(wait)
+        await self._send(packet)
+        self._light_frame_at = loop.time()
+        self._light_frame_sent = True
 
     async def _require_light_page(self) -> None:
         """Wait briefly for this connection's light reply, which follows the startup query."""
@@ -260,13 +285,13 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
 
     async def lights_off(self) -> None:
         await self._require_light_page()
-        await self._send(codec.function(LIGHT_OFF, single=self._single))
+        await self._send_light(codec.function(LIGHT_OFF, single=self._single))
 
     async def set_light_color(self, rgb_color: tuple[int, int, int]) -> None:
         # The colour frame also switches the light on.
         await self._require_light_page()
         self._light_rgb = rgb_color
-        await self._send(codec.rgb(*self._scaled_rgb()))
+        await self._send_light(codec.rgb(*self._scaled_rgb()))
 
     @property
     def supports_light_timer(self) -> bool:
