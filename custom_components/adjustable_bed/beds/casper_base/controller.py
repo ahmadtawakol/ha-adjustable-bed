@@ -25,7 +25,7 @@ from ...profiles.casper import (
     ProductRow,
     light_duration,
 )
-from ...state_keys import MASSAGE_TIMER_MINUTES
+from ...state_keys import LIGHT_TIMER_OPTION, MASSAGE_TIMER_MINUTES
 from ..base import BedController, ProfileExecution
 from ..builder import BuildContext
 from ..catalog_buttons import Kind, catalog_button, massage_timer_minutes, unique_buttons
@@ -64,6 +64,8 @@ SOUNDTRACK_GUARD_S = 2
 """A soundtrack switch within this time of the last one is dropped."""
 SOUNDTRACK_DELAY_S = 0.9
 """The soundtrack switch follows its Bluetooth switch after this delay."""
+LIGHT_ALWAYS_ON: Final = "Always On"
+"""The light timer option that keeps the light on until it is turned off."""
 SNORE_POLL_S = 3
 """The external snore detector is sampled this often, first after one period."""
 
@@ -119,6 +121,8 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._snore_count = 0
         self._music_debounce_until = 0.0
         self._music_bluetooth = False
+        self._light_rgb: tuple[int, int, int] = (255, 255, 255)
+        self._light_timer_seconds = 0
 
     @property
     def control_characteristic_uuid(self) -> str:
@@ -166,6 +170,96 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
 
     def controller_button_available(self, key: str) -> bool:
         return not key.startswith("casper_music_page_") or "music_available" in self.events
+
+    # Ordinary light page: the product's light flag without the RGB-strip flag,
+    # opened by the bed's light capability reply. The bed reports no light state.
+    @property
+    def _has_light_page(self) -> bool:
+        return bool(self.product[6]) and not self.product[7]
+
+    @property
+    def _light_page_open(self) -> bool:
+        return self._has_light_page and "light_available" in self.events
+
+    @property
+    def has_dynamic_controller_entities(self) -> bool:
+        return self._has_light_page
+
+    @property
+    def retained_entity_keys(self) -> frozenset[tuple[str, str]]:
+        # The light and its timer appear once the light capability reply arrives.
+        if self._has_light_page and not self._light_page_open:
+            return frozenset({("light", "under_bed_lights"), ("select", "light_timer")})
+        return frozenset()
+
+    @property
+    def supports_lights(self) -> bool:
+        return self._light_page_open
+
+    @property
+    def supports_discrete_light_control(self) -> bool:
+        return self._light_page_open
+
+    @property
+    def light_state_is_assumed(self) -> bool:
+        return True
+
+    @property
+    def supports_light_color_control(self) -> bool:
+        return self._light_page_open
+
+    @property
+    def light_color_control_pending(self) -> bool:
+        return self._has_light_page and not self._light_page_open
+
+    @property
+    def supported_color_mode(self) -> str | None:
+        return "rgb" if self._light_page_open else None
+
+    @property
+    def default_light_rgb_color(self) -> tuple[int, int, int] | None:
+        return self._light_rgb
+
+    async def lights_on(self) -> None:
+        await self.set_light_color(self._light_rgb)
+
+    async def lights_off(self) -> None:
+        if not self._light_page_open:
+            raise NotImplementedError("This bed has not opened its light page")
+        await self._send(codec.function(LIGHT_OFF, single=self._single))
+
+    async def set_light_color(self, rgb_color: tuple[int, int, int]) -> None:
+        # The colour frame also switches the light on.
+        if not self._light_page_open:
+            raise NotImplementedError("This bed has not opened its light page")
+        await self._send(codec.rgb(*rgb_color))
+        self._light_rgb = rgb_color
+
+    @property
+    def supports_light_timer(self) -> bool:
+        return self._light_page_open
+
+    @property
+    def light_timer_pending(self) -> bool:
+        return self._has_light_page and not self._light_page_open
+
+    @property
+    def light_timer_options(self) -> list[str]:
+        if not self._light_page_open:
+            return []
+        return [LIGHT_ALWAYS_ON, *(f"{minute} min" for minute in range(1, 16))]
+
+    @property
+    def light_auto_off_seconds(self) -> int | None:
+        return self._light_timer_seconds or None
+
+    async def set_light_timer(self, timer_option: str) -> None:
+        if timer_option not in self.light_timer_options:
+            raise ValueError("Choose a light timer this bed offers")
+        seconds = 0 if timer_option == LIGHT_ALWAYS_ON else int(timer_option.split()[0]) * 60
+        with self.sent_state(LIGHT_TIMER_OPTION(timer_option)):
+            await self._send(codec.light_timer(*light_duration(seconds)))
+        self._light_timer_seconds = seconds
 
     @property
     def actions(self) -> dict[str, tuple[int, int | None]]:

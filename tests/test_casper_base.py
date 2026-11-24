@@ -473,3 +473,35 @@ async def test_startup_queries_survive_a_stale_stop():
     c.cancel_command.set()
     await ctrl.start_notify()
     assert len(frames(c)) == 4
+
+
+async def test_light_page_opens_the_rgb_light_and_timer():
+    ctrl, c = make("caspermax")
+    assert not ctrl.supports_light_color_control
+    assert ctrl.light_color_control_pending and ctrl.light_timer_pending
+    assert ctrl.retained_entity_keys == {("light", "under_bed_lights"), ("select", "light_timer")}
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    assert ctrl.supports_light_color_control and ctrl.supports_discrete_light_control
+    assert ctrl.supported_color_mode == "rgb" and ctrl.light_state_is_assumed
+    assert not ctrl.light_color_control_pending and ctrl.retained_entity_keys == frozenset()
+    assert ctrl.light_timer_options[:3] == ["Always On", "1 min", "2 min"]
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.set_light_color((255, 0, 0))
+    await ctrl.lights_off()
+    await ctrl.lights_on()
+    from custom_components.adjustable_bed.codec import richmat as codec
+
+    # Off is the light-off command; on repeats the last colour, which also lights it.
+    red = codec.rgb(255, 0, 0).hex()
+    assert frames(c) == [red, "6e010075e4", red]
+    await ctrl.set_light_timer("Always On")
+    assert frames(c)[-1] == "6e0bffff77"
+    await ctrl.set_light_timer("5 min")
+    assert ctrl.light_auto_off_seconds == 300
+
+
+def test_pro_and_rgb_products_have_no_ordinary_light_entity():
+    pro, _ = make("casperpro")
+    pro._consume(Event("light_available", {}))
+    assert not pro.supports_light_color_control and pro.retained_entity_keys == frozenset()
