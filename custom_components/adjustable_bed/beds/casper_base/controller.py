@@ -125,6 +125,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._music_debounce_until = 0.0
         self._music_bluetooth = False
         self._light_rgb: tuple[int, int, int] = (255, 255, 255)
+        self._light_level = 100
         self._light_timer_seconds = 0
 
     @property
@@ -223,8 +224,28 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     def default_light_rgb_color(self) -> tuple[int, int, int] | None:
         return self._light_rgb
 
+    @property
+    def supports_light_level_control(self) -> bool:
+        return self._light_page_open
+
+    @property
+    def light_level_max(self) -> int:
+        return 100
+
+    def _scaled_rgb(self) -> tuple[int, int, int]:
+        # The strip dims by channel value, so brightness scales the colour.
+        return tuple(round(c * self._light_level / 100) for c in self._light_rgb)  # type: ignore[return-value]
+
     async def lights_on(self) -> None:
         await self.set_light_color(self._light_rgb)
+
+    async def set_light_level(self, level: int) -> None:
+        if level <= 0:
+            await self.lights_off()
+            return
+        await self._require_light_page()
+        self._light_level = min(level, 100)
+        await self._send(codec.rgb(*self._scaled_rgb()))
 
     async def _require_light_page(self) -> None:
         """Wait briefly for this connection's light reply, which follows the startup query."""
@@ -244,8 +265,8 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     async def set_light_color(self, rgb_color: tuple[int, int, int]) -> None:
         # The colour frame also switches the light on.
         await self._require_light_page()
-        await self._send(codec.rgb(*rgb_color))
         self._light_rgb = rgb_color
+        await self._send(codec.rgb(*self._scaled_rgb()))
 
     @property
     def supports_light_timer(self) -> bool:

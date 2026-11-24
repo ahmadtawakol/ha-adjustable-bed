@@ -519,3 +519,21 @@ async def test_light_command_right_after_connect_waits_for_the_light_reply():
     await ctrl.set_light_timer("Always On")
     await task
     assert frames(c)[-1] == "6e0bffff77"
+
+
+async def test_light_level_dims_the_colour():
+    from custom_components.adjustable_bed.codec import richmat as codec
+
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    assert ctrl.supports_light_level_control and ctrl.light_level_max == 100
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.set_light_color((200, 100, 0))
+    await ctrl.set_light_level(50)
+    await ctrl.set_light_level(0)
+    assert frames(c) == [
+        codec.rgb(200, 100, 0).hex(),
+        codec.rgb(100, 50, 0).hex(),
+        "6e010075e4",
+    ]
