@@ -466,3 +466,10 @@ async def assert_timer_select_sends_the_timer_actions(build) -> None:
 @pytest.mark.parametrize("model", PRODUCTS)
 async def test_massage_timer_actions_are_one_select(model):
     await assert_timer_select_sends_the_timer_actions(lambda: make(model))
+
+
+async def test_startup_queries_survive_a_stale_stop():
+    ctrl, c = make("caspermax")
+    c.cancel_command.set()
+    await ctrl.start_notify()
+    assert len(frames(c)) == 4

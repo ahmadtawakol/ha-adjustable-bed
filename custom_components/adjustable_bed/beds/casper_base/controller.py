@@ -385,10 +385,12 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
 
     async def _initialize(self) -> None:
         """Run this app's startup after subscribing to the selected service."""
+        # A STOP sent while no command ran leaves the shared cancel event set;
+        # it must not skip these queries, or the light and clock pages never open.
         for action, code in QUERIES:
-            await self._send(codec.function(code, action=action, single=self._single))
+            await self._send(codec.function(code, action=action, single=self._single), cleanup=True)
         if self.product[10]:
-            await self._send(codec.calendar(dt_util.now(), build=codec.record_20_len))
+            await self._send(codec.calendar(dt_util.now(), build=codec.record_20_len), cleanup=True)
 
     def _build_notification_callback(self) -> Callable[[BleakGATTCharacteristic, bytearray], None]:
         return self._on_notification
