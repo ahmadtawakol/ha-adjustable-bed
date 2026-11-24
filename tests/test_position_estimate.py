@@ -666,6 +666,7 @@ async def test_lower_to_flat_runs_past_full_travel_and_keeps_unknown(
 
 def test_octo_and_richmat_declare_their_estimated_motors() -> None:
     from custom_components.adjustable_bed.beds.base import BedController
+    from custom_components.adjustable_bed.beds.casper_base.controller import CasperBaseController
     from custom_components.adjustable_bed.beds.octo.controller import OctoController
     from custom_components.adjustable_bed.beds.richmat.controller import RichmatController
     from custom_components.adjustable_bed.beds.rmcontrol.controller import RmcontrolController
@@ -687,6 +688,18 @@ def test_octo_and_richmat_declare_their_estimated_motors() -> None:
         "feet": ("feet",),
         "head_feet": ("head", "feet"),
         "pillow": (),
+    }
+    assert groups(CasperBaseController, ("back", "legs", "head", "lumbar")) == {
+        "back": ("back",),
+        "legs": ("legs",),
+        "head": ("head",),
+        "lumbar": (),
+    }
+    assert groups(CasperBaseController, ("back", "legs", "head_feet", "motor_3")) == {
+        "back": ("back",),
+        "legs": ("legs",),
+        "head_feet": ("back", "legs"),
+        "motor_3": (),
     }
     assert groups(RmcontrolController, ("head", "feet")) == {}
     assert groups(BedController, ("back", "legs")) == {}
@@ -804,3 +817,13 @@ async def test_stop_during_lower_both_ends_the_whole_request(
     monkeypatch.setattr("custom_components.adjustable_bed.services._async_timed_move", timed_move)
     await pe.async_lower_to_flat(hass, manager, manager.beds.values())
     assert moved == ["left:back"]
+
+
+async def test_untracked_preset_hook_makes_estimates_unknown(hass: HomeAssistant) -> None:
+    manager = await calibrated(hass)
+    bed = manager.beds[LEFT]
+    pe.notify_untracked_preset(
+        SimpleNamespace(hass=hass, entry=SimpleNamespace(entry_id="entry"), address=LEFT)
+    )
+    assert bed.state("back") is EstimateState.UNKNOWN
+    assert bed.state("legs") is EstimateState.UNKNOWN

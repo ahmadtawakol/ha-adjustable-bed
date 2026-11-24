@@ -175,6 +175,41 @@ async def test_external_detector_threshold_distinct_from_manual():
     assert ctrl._snore_count == 0
 
 
+async def test_external_detector_recall_invalidates_estimates(monkeypatch):
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    hook = MagicMock()
+    monkeypatch.setattr(
+        "custom_components.adjustable_bed.beds.casper_base.controller.notify_untracked_preset",
+        hook,
+    )
+    for _ in range(4):
+        await ctrl._snore_result(1)
+    hook.assert_not_called()
+    await ctrl._snore_result(1)
+    hook.assert_called_once_with(c)
+
+
+def test_max_offers_estimates_for_its_directional_axes():
+    from custom_components.adjustable_bed.position_estimate_flow import eligible_motors
+
+    ctrl, _ = make("caspermax")
+    assert [spec.key for spec in ctrl.motor_control_specs] == ["back", "legs", "head", "lumbar"]
+    assert eligible_motors(ctrl) == ["back", "legs", "head"]
+
+
+def test_only_recalls_that_move_the_bed_invalidate_estimates():
+    ctrl, _ = make("caspermax")
+    invalidating = {spec.key for spec in ctrl.controller_button_specs if spec.invalidates_position}
+    # Flat and memory recall use the shared preset buttons, which already invalidate.
+    assert invalidating == {
+        "casper_antisnoring",
+        "casper_loungeposition",
+        "casper_zerogravity",
+        "casper_tvposition",
+    }
+
+
 async def test_alarm_and_light_capability_gates():
     ctrl, c = make("nisconup355b")
     await ctrl.start_notify()
