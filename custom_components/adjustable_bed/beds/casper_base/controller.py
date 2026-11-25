@@ -69,6 +69,8 @@ LIGHT_ALWAYS_ON: Final = "Always On"
 LIGHT_TIMER_OPTIONS: Final = (LIGHT_ALWAYS_ON, *(f"{minute} min" for minute in range(1, 16)))
 LIGHT_PAGE_WAIT_S = 1.0
 LIGHT_FRAME_GAP_S = 0.4
+LIGHT_REPEAT_WINDOW_S = 5.0
+"""A light-off repeating the last frame within this window is not sent again."""
 """Minimum spacing between light frames; the bed ignores a second one sent 100 ms after the first."""
 """A command right after connecting waits this long for the light capability reply."""
 SNORE_POLL_S = 3
@@ -150,6 +152,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._light_level = 100
         self._light_frame_at = 0.0
         self._light_frame_sent = False
+        self._last_light_packet = b""
         self._light_timer_seconds = 0
 
     @property
@@ -307,6 +310,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         await self._send(packet)
         self._light_frame_at = loop.time()
         self._light_frame_sent = True
+        self._last_light_packet = packet
 
     async def _require_light_page(self) -> None:
         """Wait briefly for this connection's light reply, which follows the startup query."""
@@ -321,7 +325,14 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
 
     async def lights_off(self) -> None:
         await self._require_light_page()
-        await self._send_light(codec.function(LIGHT_OFF, single=self._single))
+        packet = codec.function(LIGHT_OFF, single=self._single)
+        # Any frame stops a preset that is still moving, so an off that repeats
+        # the last frame moments later (two routines both switching the light
+        # off) is dropped rather than cancelling a bedtime recall.
+        loop = asyncio.get_running_loop()
+        if self._last_light_packet == packet and loop.time() - self._light_frame_at < LIGHT_REPEAT_WINDOW_S:
+            return
+        await self._send_light(packet)
 
     async def set_light_color(self, rgb_color: tuple[int, int, int]) -> None:
         # The colour frame also switches the light on.

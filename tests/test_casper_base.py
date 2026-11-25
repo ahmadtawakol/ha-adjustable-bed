@@ -581,3 +581,18 @@ async def test_colour_and_level_travel_in_one_frame():
     await ctrl.set_light_color_with_level((255, 0, 0), 10)
     await ctrl.set_light_level(10)
     assert frames(c) == [codec.rgb(26, 0, 0).hex()]
+
+
+async def test_repeated_light_off_is_not_sent_again():
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.lights_off()
+    await ctrl.preset_memory(1)
+    await ctrl.lights_off()  # still differs from the last light frame? no: recall is not a light frame
+    await ctrl.lights_off()
+    assert frames(c).count("6e010075e4") == 1
+    await ctrl.set_light_color((255, 0, 0))
+    await ctrl.lights_off()
+    assert frames(c).count("6e010075e4") == 2
