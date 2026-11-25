@@ -569,3 +569,15 @@ def test_light_colour_frame_never_carries_the_frame_marker(rgb):
     assert codec.is_valid(packet[:5]) and codec.is_valid(packet[5:])
     sent = (packet[3], packet[7], packet[8])
     assert all(abs(a - b) <= 2 for a, b in zip(sent, rgb, strict=True))
+
+
+async def test_colour_and_level_travel_in_one_frame():
+    from custom_components.adjustable_bed.codec import richmat as codec
+
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.set_light_color_with_level((255, 0, 0), 10)
+    await ctrl.set_light_level(10)
+    assert frames(c) == [codec.rgb(26, 0, 0).hex()]

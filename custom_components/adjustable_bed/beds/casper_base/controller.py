@@ -274,6 +274,19 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     async def lights_on(self) -> None:
         await self.set_light_color(self._light_rgb)
 
+    async def set_light_color_with_level(
+        self, rgb_color: tuple[int, int, int], level: int
+    ) -> None:
+        # Brightness scales the colour, so both travel in one frame: no flash at
+        # the previous level before the new one arrives.
+        if level <= 0:
+            await self.lights_off()
+            return
+        await self._require_light_page()
+        self._light_rgb = rgb_color
+        self._light_level = min(level, 100)
+        await self._send_light(self._light_colour_frame())
+
     async def set_light_level(self, level: int) -> None:
         if level <= 0:
             await self.lights_off()
