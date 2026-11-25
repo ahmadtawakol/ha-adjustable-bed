@@ -71,6 +71,22 @@ LIGHT_PAGE_WAIT_S = 1.0
 LIGHT_FRAME_GAP_S = 0.4
 LIGHT_REPEAT_WINDOW_S = 5.0
 """A light-off repeating the last frame within this window is not sent again."""
+RECALL_ACTIONS: Final = frozenset(
+    {
+        "MemoryPosition1",
+        "MemoryPosition2",
+        "MemoryPosition3",
+        "AntiSnoring",
+        "LoungePosition",
+        "ZeroGravity",
+        "TVPosition",
+        "MotorReset",
+    }
+)
+"""Positions the base moves to on its own after one frame."""
+PRESET_SETTLE_S = 45.0
+"""Light frames wait this long after a recall: any frame stops a preset still moving."""
+"""A light-off repeating the last frame within this window is not sent again."""
 """Minimum spacing between light frames; the bed ignores a second one sent 100 ms after the first."""
 """A command right after connecting waits this long for the light capability reply."""
 SNORE_POLL_S = 3
@@ -153,6 +169,9 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._light_frame_at = 0.0
         self._light_frame_sent = False
         self._last_light_packet = b""
+        self._preset_until = 0.0
+        self._pending_light: bytes | None = None
+        self._light_flush: asyncio.Task[None] | None = None
         self._light_timer_seconds = 0
 
     @property
@@ -304,6 +323,15 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     async def _send_light(self, packet: bytes) -> None:
         """Space light frames out; the bed drops one that follows another too closely."""
         loop = asyncio.get_running_loop()
+        if loop.time() < self._preset_until:
+            # Held until the recall has finished; only the latest light state is sent.
+            self._pending_light = packet
+            self._last_light_packet = packet
+            if self._light_flush is None or self._light_flush.done():
+                self._light_flush = self._coordinator.hass.async_create_background_task(
+                    self._flush_light_after_preset(), "Casper Base light after a recall"
+                )
+            return
         wait = self._light_frame_at + LIGHT_FRAME_GAP_S - loop.time()
         if self._light_frame_sent and wait > 0:
             await asyncio.sleep(wait)
@@ -311,6 +339,23 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self._light_frame_at = loop.time()
         self._light_frame_sent = True
         self._last_light_packet = packet
+
+    async def _flush_light_after_preset(self) -> None:
+        loop = asyncio.get_running_loop()
+        while (wait := self._preset_until - loop.time()) > 0:
+            await asyncio.sleep(wait)
+        await self._coordinator.async_execute_controller_command(
+            lambda _: self._send_pending_light(), cancel_running=False
+        )
+
+    async def _send_pending_light(self) -> None:
+        packet, self._pending_light = self._pending_light, None
+        if packet is not None:
+            await self._send_light(packet)
+
+    def _end_preset_hold(self) -> None:
+        """A move or STOP ends the recall: held light frames may go now."""
+        self._preset_until = 0.0
 
     async def _require_light_page(self) -> None:
         """Wait briefly for this connection's light reply, which follows the startup query."""
@@ -465,6 +510,10 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
             await self._send(codec.function(opcode, single=self._single))
             return
         moving = action.endswith(("Up", "Down")) and not action.startswith("Music")
+        if moving:
+            self._end_preset_hold()
+        elif not save and action in RECALL_ACTIONS:
+            self._preset_until = asyncio.get_running_loop().time() + PRESET_SETTLE_S
         release = moving or action in (
             "MassageHeadInstensityStrengthen",
             "MassageFootInstensityStrengthen",
@@ -599,6 +648,9 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         self.on_disconnect()
 
     def on_disconnect(self) -> None:
+        if self._light_flush is not None:
+            self._light_flush.cancel()
+            self._light_flush = None
         if self._snore_poll is not None:
             self._snore_poll.cancel()
             self._snore_poll = None
@@ -806,7 +858,10 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     move_feet_down = move_legs_down
 
     async def stop_all(self) -> None:
+        self._end_preset_hold()
         await self._opcode(codec.STOP, cleanup=True)
+        if self._pending_light is not None:
+            await self._send_pending_light()
 
     move_head_stop = stop_all
     move_back_stop = stop_all

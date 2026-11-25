@@ -583,7 +583,10 @@ async def test_colour_and_level_travel_in_one_frame():
     assert frames(c) == [codec.rgb(26, 0, 0).hex()]
 
 
-async def test_repeated_light_off_is_not_sent_again():
+async def test_repeated_light_off_is_not_sent_again(monkeypatch):
+    from custom_components.adjustable_bed.beds.casper_base import controller as mod
+
+    monkeypatch.setattr(mod, "PRESET_SETTLE_S", 0.0)
     ctrl, c = make("caspermax")
     await ctrl.start_notify()
     ctrl._consume(Event("light_available", {}))
@@ -596,3 +599,25 @@ async def test_repeated_light_off_is_not_sent_again():
     await ctrl.set_light_color((255, 0, 0))
     await ctrl.lights_off()
     assert frames(c).count("6e010075e4") == 2
+
+
+async def test_light_frames_wait_for_a_recall_to_finish():
+    ctrl, c = make("caspermax")
+    tasks = []
+
+    def create(coro, name):
+        tasks.append(coro)
+        return MagicMock(done=MagicMock(return_value=False))
+
+    c.hass.async_create_background_task.side_effect = create
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    c.client.write_gatt_char.reset_mock()
+    await ctrl.async_perform_casper_base_action("LoungePosition")
+    await ctrl.set_light_color((255, 0, 0))
+    await ctrl.lights_off()
+    assert frames(c) == ["6e010059c8"]  # only the recall: lights are held
+    assert len(tasks) == 1
+    tasks[0].close()
+    await ctrl.stop_all()  # STOP ends the hold and sends the latest light state
+    assert frames(c)[-2:] == ["6e01006edd", "6e010075e4"]
