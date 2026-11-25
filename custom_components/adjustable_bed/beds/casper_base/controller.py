@@ -75,6 +75,26 @@ SNORE_POLL_S = 3
 """The external snore detector is sampled this often, first after one period."""
 
 
+def light_colour_frame(red: int, green: int, blue: int) -> bytes:
+    """The colour frames, with no ``6E`` after either frame's header.
+
+    The bed splits its input at ``6E``, so a channel or checksum byte of that
+    value cuts the colour short and the bed ignores it. A one-step change to a
+    channel avoids it and is not visible.
+    """
+    rgb = [red, green, blue]
+    for _ in range(8):
+        packet = codec.rgb(*rgb)
+        clash = [i for i in (1, 2, 3, 4, 6, 7, 8, 9) if packet[i] == codec.BED]
+        if not clash:
+            return packet
+        i = clash[0]
+        # Bytes 3-4 belong to red's frame; 7-9 to green and blue's.
+        channel = 0 if i <= 4 else 1 if i == 7 else 2
+        rgb[channel] += -1 if rgb[channel] > 0 else 1
+    return codec.rgb(*rgb)
+
+
 class ProductProfile(ExecutionProfile, Protocol):
     """What this controller reads from a Casper Base or Hush Base profile."""
 
@@ -244,6 +264,9 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
     def light_level_max(self) -> int:
         return 100
 
+    def _light_colour_frame(self) -> bytes:
+        return light_colour_frame(*self._scaled_rgb())
+
     def _scaled_rgb(self) -> tuple[int, int, int]:
         # The strip dims by channel value, so brightness scales the colour.
         return tuple(round(c * self._light_level / 100) for c in self._light_rgb)  # type: ignore[return-value]
@@ -260,7 +283,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         if level == self._light_level and self._light_frame_sent:
             return  # The colour frame just sent already carried this level.
         self._light_level = level
-        await self._send_light(codec.rgb(*self._scaled_rgb()))
+        await self._send_light(self._light_colour_frame())
 
     async def _send_light(self, packet: bytes) -> None:
         """Space light frames out; the bed drops one that follows another too closely."""
@@ -291,7 +314,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         # The colour frame also switches the light on.
         await self._require_light_page()
         self._light_rgb = rgb_color
-        await self._send_light(codec.rgb(*self._scaled_rgb()))
+        await self._send_light(self._light_colour_frame())
 
     @property
     def supports_light_timer(self) -> bool:

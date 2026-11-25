@@ -556,3 +556,16 @@ async def test_colour_change_sends_one_spaced_light_frame(fast_sleep):
     await ctrl.set_light_level(40)
     assert frames(c) == [codec.rgb(0, 0, 255).hex(), codec.rgb(0, 0, 102).hex()]
     assert any(0 < d <= 0.4 for d in fast_sleep)
+
+
+@pytest.mark.parametrize("rgb", [(255, 110, 84), (245, 0, 0), (0, 200, 43), (110, 110, 110)])
+def test_light_colour_frame_never_carries_the_frame_marker(rgb):
+    from custom_components.adjustable_bed.beds.casper_base.controller import light_colour_frame
+    from custom_components.adjustable_bed.codec import richmat as codec
+
+    packet = light_colour_frame(*rgb)
+    assert packet[0] == packet[5] == 0x6E
+    assert 0x6E not in packet[1:5] + packet[6:10]
+    assert codec.is_valid(packet[:5]) and codec.is_valid(packet[5:])
+    sent = (packet[3], packet[7], packet[8])
+    assert all(abs(a - b) <= 2 for a, b in zip(sent, rgb, strict=True))
