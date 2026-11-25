@@ -681,7 +681,7 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
         if op == "sleep_name":
             packets = (record(6, 3, 0, (0,)),)
         elif op == "light_rgb":
-            packets = (codec.rgb(*r.rgb),)
+            packets = (light_colour_frame(*r.rgb),)
         elif op == "light_seconds":
             packets = (codec.light_timer(*light_duration(r.value)),)
         elif op == "light_off":
