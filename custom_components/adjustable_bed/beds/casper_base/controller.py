@@ -510,6 +510,12 @@ class CasperBaseController(ProfileExecution[ProductProfile], BedController, Casp
             await self._send(codec.function(opcode, single=self._single))
             return
         moving = action.endswith(("Up", "Down")) and not action.startswith("Music")
+        # The bed ignores a command that arrives right after a light frame (a
+        # wake-up Lounge sent 0.1 s after the lights came on never moved).
+        loop = asyncio.get_running_loop()
+        wait = self._light_frame_at + LIGHT_FRAME_GAP_S - loop.time()
+        if self._light_frame_sent and wait > 0:
+            await asyncio.sleep(wait)
         if moving:
             self._end_preset_hold()
         elif not save and action in RECALL_ACTIONS:

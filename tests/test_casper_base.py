@@ -621,3 +621,14 @@ async def test_light_frames_wait_for_a_recall_to_finish():
     tasks[0].close()
     await ctrl.stop_all()  # STOP ends the hold and sends the latest light state
     assert frames(c)[-2:] == ["6e01006edd", "6e010075e4"]
+
+
+async def test_a_recall_right_after_a_light_frame_waits_for_the_gap(fast_sleep):
+    ctrl, c = make("caspermax")
+    await ctrl.start_notify()
+    ctrl._consume(Event("light_available", {}))
+    await ctrl.set_light_color((255, 255, 255))
+    fast_sleep.clear()
+    await ctrl.async_perform_casper_base_action("LoungePosition")
+    assert any(0.3 < d <= 0.4 for d in fast_sleep)
+    assert frames(c)[-1] == "6e010059c8"
